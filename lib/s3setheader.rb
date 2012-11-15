@@ -1,3 +1,6 @@
+require 'thread'
+Thread.abort_on_exception = true
+
 class Runable
 	def on_finish(&callback)
 		(@on_finish ||= []) << callback
@@ -105,6 +108,119 @@ class Reporter < Runable
 	def join
 		@report_queue << :end
 		super
+	end
+end
+
+class BucketProcessor
+	def initialize(key_id, key_secret, bucket, options = {}, &callback)
+		@log = options[:log] || Logger.new(STDERR)
+		workers = options[:workers] || 10
+		lister_fetch_size = options[:lister_fetch_size] || 200
+		lister_backlog = options[:lister_backlog] || 1000
+	 	reporter_backlog = options[:reporter_backlog] || 1000
+
+		s3 = RightAws::S3.new(key_id, key_secret, multi_thread: true, logger: @log)
+		bucket = s3.bucket(bucket)
+
+		@key_queue = SizedQueue.new(lister_backlog)
+
+		@reporter = Reporter.new(reporter_backlog) do |reports|
+			total_listed_keys = 0
+			total_processed_keys = 0
+			total_succeeded_keys = 0
+			total_failed_keys = 0
+
+			processed_avg = 0.0
+			last_time = nil
+			last_total = 0
+
+			reports.each do |key, value|
+				case key
+				when :new_keys_count
+					total_listed_keys += value
+				when :processed_key
+					total_processed_keys += 1
+					if total_processed_keys % 10 == 0
+						if last_time
+							contribution = 0.25
+							new = (total_processed_keys - last_total).to_f / (Time.now.to_f - last_time)
+							processed_avg = processed_avg * (1.0 - contribution) + new * contribution
+						end
+						last_time = Time.now.to_f
+						last_total = total_processed_keys
+
+						@log.info "-- %6d: failed: %d (%.2f %%) @ %.1f/s" % [
+							total_processed_keys,
+							total_failed_keys,
+							total_failed_keys.to_f / total_processed_keys * 100,
+							processed_avg
+						]
+					end
+				when :succeeded_key
+					total_succeeded_keys += 1
+				when :failed_key
+					key, error = *value
+					@log.error "Key processing failed: #{key}: #{error.class.name}, #{error.message}"
+					total_failed_keys += 1
+				end
+				@log.debug("Report: #{key}: #{value}")
+			end
+
+			reports.on_finish do
+				@log.info("Total listed keys: #{total_listed_keys}")
+				@log.info("Total processed keys: #{total_processed_keys}")
+				@log.info("Total succeeded keys: #{total_succeeded_keys}")
+				@log.info("Total failed keys: #{total_failed_keys}")
+			end
+		end
+
+		# create lister
+		@lister = Lister.new(bucket, @key_queue, lister_fetch_size)
+		.on_keys_chunk do |keys_chunk|
+			@log.debug "Got #{keys_chunk.length} new keys"
+			@reporter.report(:new_keys_count, keys_chunk.length)
+		end
+		.on_finish do
+			@log.info "Done listing keys"
+			# notify all workers that no more messages will be posted
+			workers.times{ @key_queue << :end }
+		end
+
+		# create workers
+		@log.info "Lounching #{workers} workers"
+		@workers = (1..workers).to_a.map do |worker_no|
+			Worker.new(worker_no, @key_queue) do |key|
+				@log.debug "Worker[#{worker_no}]: Processing key #{key}"
+				yield bucket, key
+				@reporter.report :processed_key, key
+				@reporter.report :succeeded_key, key
+			end
+			.on_error do |key, error|
+				@reporter.report :processed_key, key
+				@reporter.report :failed_key, [key, error]
+			end
+			.on_finish do
+				@log.info "Worker #{worker_no} done"
+			end
+		end
+	end
+
+	def run
+		begin
+			@reporter.run
+			@lister.run
+			@workers.each(&:run)
+
+			# wait for all to finish
+			@workers.each(&:join)
+			@log.info "All workers done"
+
+			@lister.join
+			@reporter.join
+		rescue Interrupt
+			# flush thread waiting on queues
+			@key_queue.max = 999999 
+		end
 	end
 end
 
