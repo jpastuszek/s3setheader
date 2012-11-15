@@ -1,7 +1,6 @@
 class Runable
 	def on_finish(&callback)
-		@on_finish = callback
-		@thread = nil
+		(@on_finish ||= []) << callback
 		self
 	end
 
@@ -11,7 +10,7 @@ class Runable
 				yield
 			rescue Interrupt
 			ensure
-				@on_finish.call if @on_finish
+				@on_finish.each{|on_finish| on_finish.call} if @on_finish
 			end
 		end
 		self
@@ -57,59 +56,46 @@ class Worker < Runable
 		@process_key = process_key
 	end
 
+	def on_error(&callback)
+		@on_error = callback
+		self
+	end
+
 	def run
 		super do
 			until (key = @key_queue.pop) == :end
-				@process_key.call(key)
+				begin
+					@process_key.call(key)
+				rescue => error
+					@on_error.call(key, error) if @on_error
+				end
 			end
 		end
 	end
 end
 
 class Reporter < Runable
-	class Collector
-		def initialize(report_queue)
-			@report_queue = report_queue
-		end
-
-		def on_finish(&callback)
-			@on_finish = callback
-			self
-		end
-
-		def run
-			until (report = @report_queue.pop) == :end
-				@sink.call(*report)
-			end
-			@on_finish.call if @on_finish
-		end
-
-		def each(&callback)
-			@sink = callback
-		end
-	end
-
 	def initialize(queue_size, &callback)
 		@report_queue = SizedQueue.new(queue_size)
+		@processor = callback
+
 		on_finish do
 			# flush thread waiting on queue
 			@report_queue.max = 9999
 		end
-
-		@collector = Collector.new(@report_queue)
-		@processor = callback
-	end
-
-	def on_report(&callback)
-		@on_report = callback
 	end
 
 	def run
 		super do
-			break unless @processor
-			@processor.call(@collector)
-			@collector.run
+			@processor.call(self) if @processor
+			until (report = @report_queue.pop) == :end
+				@sink.call(*report) if @sink
+			end
 		end
+	end
+
+	def each(&callback)
+		@sink = callback
 	end
 
 	def report(key, value)
