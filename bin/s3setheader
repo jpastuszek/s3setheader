@@ -4,6 +4,7 @@ require 'cli'
 require 'right_aws'
 require 'logger'
 require 'thread'
+require_relative '../lib/s3setheader'
 
 settings = CLI.new do
 	description 'Set header of S3 object'
@@ -27,15 +28,26 @@ settings = CLI.new do
 		description: '<header>=<value> to set',
 		cast: lambda {|v| v.split('=', 2)}
 
-	option :max_keys_fetch,
+	option :lister_fetch_size,
 		description: 'fetch no more that that number of keys per request',
 		cast: Integer,
 		default: 200
 
-	option :max_keys_backlog,
+	option :lister_backlog,
 		description: 'maximum length of to be processed key queue',
 		cast: Integer,
 		default: 1000
+
+	option :reporter_backlog,
+		description: 'maximum length of to be processed key queue',
+		cast: Integer,
+		default: 1000
+
+	option :workers,
+		short: :t,
+		description: 'number of processing threads to start',
+		cast: Integer,
+		default: 10
 
 	switch :debug,
 		short: :d,
@@ -52,29 +64,36 @@ log.debug(settings.inspect)
 s3 = RightAws::S3.new(settings.key_id, settings.key_secret, multi_thread: true, logger: log)
 bucket = s3.bucket(settings.bucket)
 
-keys = SizedQueue.new(settings.max_keys_backlog)
-
-lister = Thread.new do
-	begin
-		marker = ''
-		loop do
-			keys_chunk = bucket.keys('max-keys' => settings.max_keys_fetch, marker: marker)
-			break if keys_chunk.empty?
-			keys_chunk.each do |key|
-				keys << key
-			end
-			marker = keys_chunk.last.name
-		end
-	rescue Interrupt
-	ensure
-		keys << :end
-	end
-end
+keys = SizedQueue.new(settings.lister_backlog)
+reports = SizedQueue.new(settings.reporter_backlog)
 
 begin
-	until (key = keys.pop) == :end
-		p key
+	Lister.new(bucket, keys, settings.lister_fetch_size)
+	.on_keys_chunk do |keys_chunk|
+		log.debug "Got #{keys_chunk.length} new keys"
 	end
+	.on_finish do
+		log.info "Done listing keys"
+		# notify all workers that no more messages will be posted
+		settings.workers.times{ keys << :end }
+	end
+	.run
+
+	# create workers
+	log.info "Lounching #{settings.workers} workers"
+	workers = (1..settings.workers).to_a.map do |worker_no|
+		Worker.new(worker_no, keys) do |key|
+			log.debug "Worker[#{worker_no}]: Processing key #{key}"
+		end
+		.on_finish do
+			log.info "Worker #{worker_no} done"
+		end
+		.run
+	end
+
+	# wait for all to finish
+	workers.each{|worker| worker.join}
+	log.info "All workers done"
 rescue Interrupt
 	keys.max = 999999 # flush thread waiting on queue
 end
