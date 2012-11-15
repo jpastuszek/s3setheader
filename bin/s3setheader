@@ -1,0 +1,81 @@
+#!/usr/bin/env ruby
+
+require 'cli'
+require 'right_aws'
+require 'logger'
+require 'thread'
+
+settings = CLI.new do
+	description 'Set header of S3 object'
+
+	option :key_id,
+		short: :i,
+		description: 'AWS access key ID',
+		required: true
+	option :key_secret,
+		short: :s,
+		description: 'AWS access key secret',
+		required: true
+
+	option :bucket,
+		short: :b,
+		description: 'bucket to precess',
+		required: true
+		
+	options :header,
+		short: :H,
+		description: '<header>=<value> to set',
+		cast: lambda {|v| v.split('=', 2)}
+
+	option :max_keys_fetch,
+		description: 'fetch no more that that number of keys per request',
+		cast: Integer,
+		default: 200
+
+	option :max_keys_backlog,
+		description: 'maximum length of to be processed key queue',
+		cast: Integer,
+		default: 1000
+
+	switch :debug,
+		short: :d,
+		description: 'log at DEBUG level'
+end.parse!
+
+log = Logger.new(STDERR)
+log.level = settings.debug ? Logger::DEBUG : Logger::INFO
+
+Thread.abort_on_exception = true
+
+log.debug(settings.inspect)
+
+s3 = RightAws::S3.new(settings.key_id, settings.key_secret, multi_thread: true, logger: log)
+bucket = s3.bucket(settings.bucket)
+
+keys = SizedQueue.new(settings.max_keys_backlog)
+
+lister = Thread.new do
+	begin
+		marker = ''
+		loop do
+			keys_chunk = bucket.keys('max-keys' => settings.max_keys_fetch, marker: marker)
+			break if keys_chunk.empty?
+			keys_chunk.each do |key|
+				keys << key
+			end
+			marker = keys_chunk.last.name
+		end
+	rescue Interrupt
+	ensure
+		keys << :end
+	end
+end
+
+begin
+	until (key = keys.pop) == :end
+		p key
+	end
+rescue Interrupt
+	keys.max = 999999 # flush thread waiting on queue
+end
+
