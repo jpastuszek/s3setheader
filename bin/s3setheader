@@ -65,12 +65,29 @@ s3 = RightAws::S3.new(settings.key_id, settings.key_secret, multi_thread: true, 
 bucket = s3.bucket(settings.bucket)
 
 keys = SizedQueue.new(settings.lister_backlog)
-reports = SizedQueue.new(settings.reporter_backlog)
 
 begin
+	reporter = Reporter.new(settings.reporter_backlog) do |reports|
+		total_listed_keys = 0
+
+		reports.each do |key, value|
+			case key
+			when :new_keys_count
+				total_listed_keys += value
+			end
+			log.debug("Report: #{key}: #{value}")
+		end
+
+		reports.on_finish do
+			log.info("Total listed keys: #{total_listed_keys}")
+		end
+	end
+	reporter.run
+
 	Lister.new(bucket, keys, settings.lister_fetch_size)
 	.on_keys_chunk do |keys_chunk|
 		log.debug "Got #{keys_chunk.length} new keys"
+		reporter.report(:new_keys_count, keys_chunk.length)
 	end
 	.on_finish do
 		log.info "Done listing keys"
@@ -92,9 +109,11 @@ begin
 	end
 
 	# wait for all to finish
-	workers.each{|worker| worker.join}
+	workers.each(&:join)
 	log.info "All workers done"
+	reporter.join
 rescue Interrupt
-	keys.max = 999999 # flush thread waiting on queue
+	# flush thread waiting on queues
+	keys.max = 999999 
 end
 
