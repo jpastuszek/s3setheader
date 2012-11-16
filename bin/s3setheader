@@ -53,6 +53,10 @@ settings = CLI.new do
 		cast: Integer,
 		default: 10
 
+	switch :noop,
+		short: :n,
+		description: 'do not change any object; just say what would be done'
+
 	switch :debug,
 		short: :d,
 		description: 'log at DEBUG level'
@@ -127,8 +131,13 @@ BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket,
 			headers = new_headers.merge(Hash[remove_headers.map{|k| [k, nil]}])
 
 			# Main HACK over S3 is to use :replace copy on the same object to avoid data copy
-			new_values = bucket.s3.interface.copy(bucket.name, key.name, bucket.name, key.name, :replace, headers)
-			log.debug{"#{key} -          last modified: #{Time.parse(new_values[:last_modified]).utc}"}
+			unless settings.noop
+				new_values = bucket.s3.interface.copy(bucket.name, key.name, bucket.name, key.name, :replace, headers)
+				log.debug{"#{key} -          last modified: #{Time.parse(new_values[:last_modified]).utc}"}
+			else
+				log.debug{"#{key} - doing nothing (noop)"}
+				reporter.report :noop_key, key
+			end
 			reporter.report :updated_key, key
 		else
 			log.debug{"#{key} - headers are already set"}

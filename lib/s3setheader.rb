@@ -133,6 +133,7 @@ class BucketProcessor
 			total_failed_keys = 0
 			total_updated_keys = 0
 			total_skipped_keys = 0
+			total_nooped_keys = 0
 
 			processed_avg = 0.0
 			last_time = nil
@@ -174,6 +175,8 @@ class BucketProcessor
 					total_updated_keys += 1
 				when :skipped_key
 					total_skipped_keys += 1
+				when :noop_key
+					total_nooped_keys += 1
 				end
 				#@log.debug("Report: #{key}: #{value}")
 			end
@@ -185,6 +188,7 @@ class BucketProcessor
 				@log.info("Total failed keys:    #{total_failed_keys}")
 				@log.info("Total updated keys:   #{total_updated_keys}")
 				@log.info("Total skipped keys:   #{total_skipped_keys}")
+				@log.info("Total nooped keys:    #{total_nooped_keys}")
 			end
 		end
 
