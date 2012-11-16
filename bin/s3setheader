@@ -40,6 +40,14 @@ settings = CLI.new do
 		description: 'maximum length of to be processed key queue',
 		cast: Integer,
 		default: 1000
+	option :reporter_summary_interval,
+		description: 'pring summary every some number of processed objects',
+		cast: Integer,
+		default: 100
+	option :reporter_average_contribution,
+		description: 'how much does last average calculation contribute in the printed value - less => more stable',
+		cast: Float,
+		default: 0.10
 
 	option :workers,
 		short: :t,
@@ -62,7 +70,9 @@ BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket,
 		workers: settings.workers,
 		lister_fetch_size: settings.lister_fetch_size,
 		lister_backlog: settings.lister_backlog,
-		reporter_backlog: settings.reporter_backlog
+		reporter_backlog: settings.reporter_backlog,
+		reporter_summary_interval: settings.reporter_summary_interval,
+		reporter_average_contribution: settings.reporter_average_contribution
 	) do |bucket, key|
 	p key
 end

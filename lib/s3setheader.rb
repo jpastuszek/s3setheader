@@ -118,6 +118,8 @@ class BucketProcessor
 		lister_fetch_size = options[:lister_fetch_size] || 200
 		lister_backlog = options[:lister_backlog] || 1000
 	 	reporter_backlog = options[:reporter_backlog] || 1000
+		reporter_summary_interval = options[:reporter_summary_interval] || 100
+		reporter_average_contribution = options[:reporter_average_contribution] || 0.10
 
 		s3 = RightAws::S3.new(key_id, key_secret, multi_thread: true, logger: @log)
 		bucket = s3.bucket(bucket)
@@ -140,19 +142,20 @@ class BucketProcessor
 					total_listed_keys += value
 				when :processed_key
 					total_processed_keys += 1
-					if total_processed_keys % 10 == 0
+					if total_processed_keys % reporter_summary_interval == 0
 						if last_time
-							contribution = 0.25
+							contribution = reporter_average_contribution
 							new = (total_processed_keys - last_total).to_f / (Time.now.to_f - last_time)
 							processed_avg = processed_avg * (1.0 - contribution) + new * contribution
 						end
 						last_time = Time.now.to_f
 						last_total = total_processed_keys
 
-						@log.info "-- %6d: failed: %d (%.2f %%) @ %.1f/s" % [
+						@log.info "-- processed %6d: failed: %6d (%5.2f %%) [backlog: %3d] @ %.1f op/s" % [
 							total_processed_keys,
 							total_failed_keys,
 							total_failed_keys.to_f / total_processed_keys * 100,
+							@key_queue.size,
 							processed_avg
 						]
 					end
@@ -181,7 +184,7 @@ class BucketProcessor
 			@reporter.report(:new_keys_count, keys_chunk.length)
 		end
 		.on_finish do
-			@log.info "Done listing keys"
+			@log.debug "Done listing keys"
 			# notify all workers that no more messages will be posted
 			workers.times{ @key_queue << :end }
 		end
@@ -200,7 +203,7 @@ class BucketProcessor
 				@reporter.report :failed_key, [key, error]
 			end
 			.on_finish do
-				@log.info "Worker #{worker_no} done"
+				@log.debug "Worker #{worker_no} done"
 			end
 		end
 	end
