@@ -2,6 +2,7 @@
 require 'cli'
 require 'right_aws'
 require 'logger'
+require 'time'
 require_relative '../lib/s3setheader'
 
 settings = CLI.new do
@@ -20,17 +21,14 @@ settings = CLI.new do
 		short: :b,
 		description: 'bucket to precess',
 		required: true
-		
-	options :header,
-		short: :H,
-		description: '<header>=<value> to set',
-		cast: lambda {|v| v.split('=', 2)}
+	option :prefix,
+		short: :p,
+		description: 'process only object of key starting with given prefix'
 
 	option :lister_fetch_size,
 		description: 'fetch no more that that number of keys per request',
 		cast: Integer,
 		default: 200
-
 	option :lister_backlog,
 		description: 'maximum length of to be processed key queue',
 		cast: Integer,
@@ -59,10 +57,28 @@ settings = CLI.new do
 		short: :d,
 		description: 'log at DEBUG level'
 
-	argument :prefix,
-		description: 'process only object of key starting with given prefix',
-		required: false
-end.parse!
+	option :content_type,
+		description: 'set Content-Type header; '' to remove'
+	option :content_encoding,
+		description: 'set Content-Encoding header; '' to remove'
+	options :cache_control,
+		description: 'set Cache-Control header to comma separated flags; can be used multiple times to specify flag by flag; '' to remove'
+	options :content_disposition,
+		description: 'set Content-Disposition header to given value; can be used multiple times to specify flags by flag; '' to remove'
+	options :content_language,
+		description: 'set Content-Language header to comma separated flags; can be used multiple times to specify flag by flag; '' to remove'
+	option :website_redirect_location,
+		description: 'redirect on object fetch to given URL (must start with http:// or https:// or /); '' to remove'
+	option :expires,
+		description: 'set Expires header do date string in format supported by Ruby Time.parse; '' to remove'
+
+end.parse! do |settings|
+	settings.cache_control = settings.cache_control.empty? ? nil : settings.cache_control.join(', ')
+	settings.content_language = settings.content_language.empty? ? nil : settings.content_language.join(', ')
+	settings.content_disposition = settings.content_disposition.empty? ? nil : settings.content_disposition.join('; ')
+	fail 'website redirect location must start with http:// or https:// or /' if settings.website_redirect_location and settings.website_redirect_location !~ %r{^http://|https://|/|$}
+	settings.expires = Time.parse(settings.expires).httpdate if settings.expires and not settings.expires.empty?
+end
 
 log = Logger.new(STDERR)
 log.level = settings.debug ? Logger::DEBUG : Logger::INFO
@@ -70,9 +86,22 @@ log.level = settings.debug ? Logger::DEBUG : Logger::INFO
 log.debug(settings.inspect)
 
 generated_header = ["x-amz-id-2", "x-amz-request-id", "date", "last-modified", "etag", "accept-ranges", "content-length", "server"]
-set_headers = Hash[settings.header.map{|k, v| [k.downcase, v]}]
+
+set_headers = {}
+set_headers['content-type'] = settings.content_type if settings.content_type
+set_headers['content-encoding'] = settings.content_encoding if settings.content_encoding
+set_headers['cache-control'] = settings.cache_control if settings.cache_control
+set_headers['x-amz-website-redirect-location'] = settings.website_redirect_location if settings.website_redirect_location
+set_headers['content-disposition'] = settings.content_disposition if settings.content_disposition
+set_headers['content-language'] = settings.content_language if settings.content_language
+set_headers['expires'] = settings.expires if settings.expires
+
+# empty string is to remove the header
+remove_headers = set_headers.reject{|k, v| not v.empty?}.keys
+set_headers.delete_if{|k, v| v.empty?}
 
 log.info "Setting headers: #{set_headers}"
+log.info "Removing headers: #{remove_headers}"
 
 BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket, 
 		log: log,
@@ -86,14 +115,23 @@ BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket,
 		key.head
 		headers_to_copy = key.headers.keys - generated_header
 
-		new_headers = key.headers.select{|header| headers_to_copy.include? header}
-		log.debug{"#{key} - original headers: #{new_headers}"}
+		log.debug{"#{key} - original last modified: #{Time.parse(key.headers['last-modified']).utc}"}
+		orig_headers = key.headers.select{|header| headers_to_copy.include? header}
+		log.debug{"#{key} -       original headers: #{orig_headers}"}
 
-		new_headers.merge!(set_headers)
-		log.debug{"#{key} -      new headers: #{new_headers}"}
+		new_headers = orig_headers.merge(set_headers).delete_if{|k, v| remove_headers.include? k}
+		log.debug{"#{key} -            new headers: #{new_headers}"}
 
-		# Main HACK over S3 is to use :replace copy on the same object to avoid data copy
-		bucket.s3.interface.copy(bucket.name, key.name, bucket.name, key.name, :replace, new_headers)
+		if orig_headers != new_headers
+			# setting header to nil will get it removed
+			headers = new_headers.merge(Hash[remove_headers.map{|k| [k, nil]}])
+
+			# Main HACK over S3 is to use :replace copy on the same object to avoid data copy
+			new_values = bucket.s3.interface.copy(bucket.name, key.name, bucket.name, key.name, :replace, headers)
+			log.debug{"#{key} -          last modified: #{Time.parse(new_values[:last_modified]).utc}"}
+		else
+			log.debug{"#{key} - headers are already set"}
+		end
 end
 .run(settings.prefix)
 
