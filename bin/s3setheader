@@ -23,7 +23,7 @@ settings = CLI.new do
 		required: true
 	option :prefix,
 		short: :p,
-		description: 'process only object of key starting with given prefix'
+		description: 'process only objects of key starting with given prefix'
 
 	option :lister_fetch_size,
 		description: 'fetch no more that that number of keys per request',
@@ -35,7 +35,7 @@ settings = CLI.new do
 		default: 1000
 
 	option :reporter_backlog,
-		description: 'maximum length of to be processed key queue',
+		description: 'maximum length of to be processed report queue',
 		cast: Integer,
 		default: 1000
 	option :reporter_summary_interval,
@@ -62,20 +62,19 @@ settings = CLI.new do
 		description: 'log at DEBUG level'
 
 	option :content_type,
-		description: 'set Content-Type header; '' to remove'
+		description: 'set Content-Type header; "" to remove'
 	option :content_encoding,
-		description: 'set Content-Encoding header; '' to remove'
+		description: 'set Content-Encoding header; "" to remove'
 	options :cache_control,
-		description: 'set Cache-Control header to comma separated flags; can be used multiple times to specify flag by flag; '' to remove'
+		description: 'set Cache-Control header to comma separated flags; can be used multiple times to specify flag by flag; "" to remove'
 	options :content_disposition,
-		description: 'set Content-Disposition header to given value; can be used multiple times to specify flags by flag; '' to remove'
+		description: 'set Content-Disposition header to given value; can be used multiple times to specify flags by flag; "" to remove'
 	options :content_language,
-		description: 'set Content-Language header to comma separated flags; can be used multiple times to specify flag by flag; '' to remove'
+		description: 'set Content-Language header to comma separated flags; can be used multiple times to specify flag by flag; "" to remove'
 	option :website_redirect_location,
-		description: 'redirect on object fetch to given URL (must start with http:// or https:// or /); '' to remove'
+		description: 'redirect on object fetch to given URL (must start with http:// or https:// or /); "" to remove'
 	option :expires,
-		description: 'set Expires header do date string in format supported by Ruby Time.parse; '' to remove'
-
+		description: 'set Expires header do date string in format supported by Ruby Time.parse; "" to remove'
 end.parse! do |settings|
 	settings.cache_control = settings.cache_control.empty? ? nil : settings.cache_control.join(', ')
 	settings.content_language = settings.content_language.empty? ? nil : settings.content_language.join(', ')
