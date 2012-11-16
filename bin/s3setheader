@@ -58,6 +58,10 @@ settings = CLI.new do
 	switch :debug,
 		short: :d,
 		description: 'log at DEBUG level'
+
+	argument :prefix,
+		description: 'process only object of key starting with given prefix',
+		required: false
 end.parse!
 
 log = Logger.new(STDERR)
@@ -74,7 +78,9 @@ BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket,
 		reporter_summary_interval: settings.reporter_summary_interval,
 		reporter_average_contribution: settings.reporter_average_contribution
 	) do |bucket, key|
-	p key
+		p key
+		key.head
+	p key.headers
 end
-.run
+.run(settings.prefix)
 

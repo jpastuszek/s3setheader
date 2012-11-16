@@ -36,11 +36,11 @@ class Lister < Runable
 		self
 	end
 	
-	def run
-		super do
+	def run(prefix = nil)
+		super() do
 			marker = ''
 			loop do
-				keys_chunk = @bucket.keys('max-keys' => @fetch_size, marker: marker)
+				keys_chunk = @bucket.keys(prefix: prefix, 'max-keys' => @fetch_size, marker: marker)
 				break if keys_chunk.empty?
 				@on_keys_chunk.call(keys_chunk) if @on_keys_chunk
 				keys_chunk.each do |key|
@@ -208,10 +208,10 @@ class BucketProcessor
 		end
 	end
 
-	def run
+	def run(prefix = nil)
 		begin
 			@reporter.run
-			@lister.run
+			@lister.run(prefix)
 			@workers.each(&:run)
 
 			# wait for all to finish
