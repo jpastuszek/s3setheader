@@ -69,6 +69,11 @@ log.level = settings.debug ? Logger::DEBUG : Logger::INFO
 
 log.debug(settings.inspect)
 
+generated_header = ["x-amz-id-2", "x-amz-request-id", "date", "last-modified", "etag", "accept-ranges", "content-length", "server"]
+set_headers = Hash[settings.header.map{|k, v| [k.downcase, v]}]
+
+log.info "Setting headers: #{set_headers}"
+
 BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket, 
 		log: log,
 		workers: settings.workers,
@@ -78,9 +83,17 @@ BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket,
 		reporter_summary_interval: settings.reporter_summary_interval,
 		reporter_average_contribution: settings.reporter_average_contribution
 	) do |bucket, key|
-		p key
 		key.head
-	p key.headers
+		headers_to_copy = key.headers.keys - generated_header
+
+		new_headers = key.headers.select{|header| headers_to_copy.include? header}
+		log.debug{"#{key} - original headers: #{new_headers}"}
+
+		new_headers.merge!(set_headers)
+		log.debug{"#{key} -      new headers: #{new_headers}"}
+
+		# Main HACK over S3 is to use :replace copy on the same object to avoid data copy
+		bucket.s3.interface.copy(bucket.name, key.name, bucket.name, key.name, :replace, new_headers)
 end
 .run(settings.prefix)
 
