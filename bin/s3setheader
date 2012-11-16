@@ -111,7 +111,7 @@ BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket,
 		reporter_backlog: settings.reporter_backlog,
 		reporter_summary_interval: settings.reporter_summary_interval,
 		reporter_average_contribution: settings.reporter_average_contribution
-	) do |bucket, key|
+	) do |bucket, key, reporter|
 		key.head
 		headers_to_copy = key.headers.keys - generated_header
 
@@ -129,8 +129,10 @@ BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket,
 			# Main HACK over S3 is to use :replace copy on the same object to avoid data copy
 			new_values = bucket.s3.interface.copy(bucket.name, key.name, bucket.name, key.name, :replace, headers)
 			log.debug{"#{key} -          last modified: #{Time.parse(new_values[:last_modified]).utc}"}
+			reporter.report :updated_key, key
 		else
 			log.debug{"#{key} - headers are already set"}
+			reporter.report :skipped_key, key
 		end
 end
 .run(settings.prefix)

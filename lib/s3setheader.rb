@@ -131,6 +131,8 @@ class BucketProcessor
 			total_processed_keys = 0
 			total_succeeded_keys = 0
 			total_failed_keys = 0
+			total_updated_keys = 0
+			total_skipped_keys = 0
 
 			processed_avg = 0.0
 			last_time = nil
@@ -151,10 +153,13 @@ class BucketProcessor
 						last_time = Time.now.to_f
 						last_total = total_processed_keys
 
-						@log.info "-- processed %6d: failed: %6d (%5.2f %%) [backlog: %3d] @ %.1f op/s" % [
+						@log.info "-- processed %6d: failed: %6d (%6.2f %%) updated: %6d skipped: %6d (%6.2f %%) [backlog: %4d] @ %.1f op/s" % [
 							total_processed_keys,
 							total_failed_keys,
 							total_failed_keys.to_f / total_processed_keys * 100,
+							total_updated_keys,
+							total_skipped_keys,
+							total_skipped_keys.to_f / total_processed_keys * 100,
 							@key_queue.size,
 							processed_avg
 						]
@@ -165,15 +170,21 @@ class BucketProcessor
 					key, error = *value
 					@log.error "Key processing failed: #{key}: #{error.class.name}, #{error.message}"
 					total_failed_keys += 1
+				when :updated_key
+					total_updated_keys += 1
+				when :skipped_key
+					total_skipped_keys += 1
 				end
-				@log.debug("Report: #{key}: #{value}")
+				#@log.debug("Report: #{key}: #{value}")
 			end
 
 			reports.on_finish do
-				@log.info("Total listed keys: #{total_listed_keys}")
+				@log.info("Total listed keys:    #{total_listed_keys}")
 				@log.info("Total processed keys: #{total_processed_keys}")
 				@log.info("Total succeeded keys: #{total_succeeded_keys}")
-				@log.info("Total failed keys: #{total_failed_keys}")
+				@log.info("Total failed keys:    #{total_failed_keys}")
+				@log.info("Total updated keys:   #{total_updated_keys}")
+				@log.info("Total skipped keys:   #{total_skipped_keys}")
 			end
 		end
 
@@ -194,7 +205,7 @@ class BucketProcessor
 		@workers = (1..workers).to_a.map do |worker_no|
 			Worker.new(worker_no, @key_queue) do |key|
 				@log.debug "Worker[#{worker_no}]: Processing key #{key}"
-				yield bucket, key
+				yield bucket, key, @reporter
 				@reporter.report :processed_key, key
 				@reporter.report :succeeded_key, key
 			end
