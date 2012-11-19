@@ -116,8 +116,10 @@ BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket,
 		reporter_average_contribution: settings.reporter_average_contribution
 	) do |bucket, key, reporter|
 		key.head
+		grantees = key.grantees
 		headers_to_copy = key.headers.keys - generated_header
 
+		log.debug "#{key} -      original grantees: #{grantees.map{|g| "#{g}[#{g.perms.join(',')}]"}.join(' ')}"
 		log.debug{"#{key} - original last modified: #{Time.parse(key.headers['last-modified']).utc}"}
 		orig_headers = key.headers.select{|header| headers_to_copy.include? header}
 		log.debug{"#{key} -       original headers: #{orig_headers}"}
@@ -133,6 +135,12 @@ BucketProcessor.new(settings.key_id, settings.key_secret, settings.bucket,
 			unless settings.noop
 				new_values = bucket.s3.interface.copy(bucket.name, key.name, bucket.name, key.name, :replace, headers)
 				log.debug{"#{key} -          last modified: #{Time.parse(new_values[:last_modified]).utc}"}
+
+				# apply grants
+				grantees.each do |grantee|
+					log.debug{"#{key} -        applying grants: #{grantee}[#{grantee.perms.join(',')}]"}
+					grantee.apply
+				end
 			else
 				log.debug{"#{key} - doing nothing (noop)"}
 				reporter.report :noop_key, key
